@@ -49,7 +49,7 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
             gpu_id = 0
         
         af.set_backend('cuda')
-        af.set_device(0)
+        af.set_device(gpu_id)
 
     if SHARED_MEMORY:
         templates  = io.load_data_memshared(params, 'templates', normalize=True, transpose=True)
@@ -155,8 +155,7 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
         try:
             # If memory on the GPU is large enough, we load the overlaps onto it
             for i in xrange(N_over):
-                c_overs[i] = c_overs[i].tocoo()
-                c_overs[i] = af.create_sparse_from_host(c_overs[i].data, c_overs[i].row, c_overs[i].col, c_overs[i].shape[0], c_overs[i].shape[1])
+                c_overs[i] = af.create_sparse_from_host(c_overs[i].data, c_overs[i].indptr, c_overs[i].indices, c_overs[i].shape[0], c_overs[i].shape[1])
         except Exception:
             if comm.rank == 0:
                 print_and_log(["Not enough memory on GPUs: GPUs are used for projection only"], 'info', logger)
@@ -314,8 +313,8 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
             all_spikes   = local_peaktimes + local_offset
 
             # Because for GPU, slicing by columns is more efficient, we need to transpose b
-            if use_gpu:
-                b = b.T
+            #if use_gpu:
+            #    b = b.T
     
             if use_gpu and not full_gpu:
                 b = to_numpy(b)
@@ -331,6 +330,7 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
                 patch_gpu= b.shape[1] == 1
             else:
                 mask     = numpy.ones((n_tm, n_t), dtype=numpy.float32)
+                b        = b.T
                 sub_b    = b[:n_tm, :]
 
             min_time     = local_peaktimes.min()
@@ -351,9 +351,9 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
 
                 if full_gpu:
                     gpu_mask    = af.from_ndarray(mask)
-                    b.mult(gpu_mask, data)
-                    tmp_mat     = data.max(0)
-                    argmax_bi   = numpy.argsort(tmp_mat.asarray()[0, :])[::-1]
+                    data        = b * gpu_mask #b.mult(gpu_mask, data)
+                    tmp_mat     = af.max(data, 0)
+                    argmax_bi   = numpy.argsort(to_numpy(tmp_mat))[::-1]
                     del tmp_mat
                 else:
                     data        = sub_b * mask
@@ -378,14 +378,14 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
                     argmax_bi = numpy.delete(argmax_bi, indices)
 
                     if full_gpu:
-                        b_array = b.asarray()
-                        sub_b   = b_array[:n_tm, :]
+                        sub_b   = b[:n_tm, :]
+                        print sub_b.shape
 
                     inds_t, inds_temp = subset, numpy.argmax(numpy.take(sub_b, subset, axis=1), 0)
 
                     if full_gpu:
                         best_amp  = sub_b[inds_temp, inds_t]/n_scalar
-                        best_amp2 = b_array[inds_temp + n_tm, inds_t]/n_scalar
+                        best_amp2 = b[inds_temp + n_tm, inds_t]/n_scalar
                     else:
                         
                         best_amp  = sub_b[inds_temp, inds_t]/n_scalar
