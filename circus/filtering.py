@@ -5,6 +5,9 @@ from circus.shared.probes import get_nodes_and_edges
 from circus.shared.messages import print_and_log, init_logging
 from circus.shared.files import get_artefact
 
+def to_numpy(A, dtype=numpy.float32):
+    return numpy.asarray(A.to_list(), dtype=dtype)
+
 def main(params, nb_cpu, nb_gpu, use_gpu):
 
 
@@ -20,6 +23,16 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
     nodes, edges   = get_nodes_and_edges(params)
     #################################################################
 
+    if use_gpu:
+        import arrayfire as af
+        ## Need to properly handle multi GPU per MPI nodes?
+        if nb_gpu > nb_cpu:
+            gpu_id = int(comm.rank//nb_cpu)
+        else:
+            gpu_id = 0
+        
+        af.set_backend('cuda')
+        af.set_device(gpu_id)
 
     def filter_file(data_file_in, data_file_out, do_filtering, do_remove_median):
 
@@ -51,6 +64,9 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
         nb_chunks, _  = data_file_in.analyze(chunk_size)
 
         b, a          = signal.butter(3, np.array(cut_off)/(params.rate/2.), 'pass')
+        if use_gpu:
+            b         = af.from_ndarray(b.astype(numpy.float32))
+            a         = af.from_ndarray(a.astype(numpy.float32))
         all_chunks    = numpy.arange(nb_chunks, dtype=numpy.int64)
         to_process    = all_chunks[comm.rank::comm.size]
         loc_nb_chunks = len(to_process)
@@ -74,13 +90,23 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
 
             local_chunk, t_offset =  data_file_in.get_data(gidx, chunk_size)
 
+            if use_gpu:
+                local_chunk = af.from_ndarray(local_chunk)
+
             if do_filtering:
-                for i in nodes:    
-                    try:           
-                        local_chunk[:, i]  = signal.filtfilt(b, a, local_chunk[:, i])
-                    except Exception:
-                        pass
-                local_chunk[:, i] -= numpy.median(local_chunk[:, i]) 
+                if not use_gpu:
+                    for i in nodes:    
+                        try:           
+                            local_chunk[:, i]  = signal.filtfilt(b, a, local_chunk[:, i])
+                        except Exception:
+                            pass
+                    local_chunk[:, i] -= numpy.median(local_chunk[:, i]) 
+                else:
+                    for i in af.ParallelRange(N_total):
+                        local_chunk[:, i] = af.iir(b, a, local_chunk[:, i])
+                        local_chunk[:, i] = af.flip(local_chunk[:, i], 0)
+                        local_chunk[:, i] = af.iir(b, a, local_chunk[:, i])
+                        local_chunk[:, i] = af.flip(local_chunk[:, i], 0)
 
             if do_remove_median:
                 if not numpy.all(nodes == numpy.arange(N_total)):
@@ -97,6 +123,9 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
                     g_offset = t_offset - data_file_in.t_start
             else:
                 g_offset = t_offset
+
+            if use_gpu:
+                local_chunk = to_numpy(local_chunk)
 
             data_file_out.set_data(g_offset, local_chunk)
 
