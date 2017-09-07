@@ -100,13 +100,14 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
                             local_chunk[:, i]  = signal.filtfilt(b, a, local_chunk[:, i])
                         except Exception:
                             pass
-                    local_chunk[:, i] -= numpy.median(local_chunk[:, i]) 
+                        local_chunk[:, i] -= numpy.median(local_chunk[:, i]) 
                 else:
                     for i in af.ParallelRange(N_total):
                         local_chunk[:, i] = af.iir(b, a, local_chunk[:, i])
                         local_chunk[:, i] = af.flip(local_chunk[:, i], 0)
                         local_chunk[:, i] = af.iir(b, a, local_chunk[:, i])
                         local_chunk[:, i] = af.flip(local_chunk[:, i], 0)
+                        local_chunk[:, i] -= af.median(local_chunk[:, i])
 
             if do_remove_median:
                 if not numpy.all(nodes == numpy.arange(N_total)):
@@ -316,8 +317,8 @@ def main(params, nb_cpu, nb_gpu, use_gpu):
         filter_file(data_file_in, data_file_out, do_filter, remove_median)
 
     if comm.rank == 0:
-        if do_filter:
-            params.write('noedits', 'filter_done', 'True')
+        # if do_filter:
+        #     params.write('noedits', 'filter_done', 'True')
         if remove_median:
             params.write('noedits', 'median_done', 'True')
 
